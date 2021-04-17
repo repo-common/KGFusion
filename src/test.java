@@ -21,4 +21,8 @@ public class test{
         test.innner in = new test.innner();
         in.print();
     }
+
+    public void print(String target){
+        System.out.println(target);
+    }
 }
