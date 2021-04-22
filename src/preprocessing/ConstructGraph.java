@@ -9,7 +9,7 @@ import java.util.*;
 public class ConstructGraph {
 
     public static Pair<List<KG>, List<Item>> prepareKGs() throws IOException {
-        String fileName = "E:\\JavaProjects\\KGfusion\\Input\\55.txt";
+        String fileName = "C:\\Users\\DAI\\Desktop\\KGFusion_edition2(1)\\KGFusion_edition2\\src\\input\\54.txt";
         InputStreamReader isr = new InputStreamReader(new FileInputStream(fileName), "UTF-8");
         BufferedReader read = new BufferedReader(isr);
         String line = "";
