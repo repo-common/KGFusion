@@ -2,24 +2,14 @@ package pipeLine;
 
 import Jama.Matrix;
 import com.huaban.analysis.jieba.JiebaSegmenter;
+import module.HeRWR;
 import org.apache.commons.lang3.tuple.Pair;
-import org.w3c.dom.css.CSSImportRule;
 import preprocessing.ConstructGraph;
 import publicDataStructure.*;
-import utils.MathUtil;
-import utils.RWR_4;
+import utils.*;
 
-import javax.lang.model.type.MirroredTypeException;
-import javax.swing.text.StyledEditorKit;
 import java.io.IOException;
-import java.net.Inet4Address;
-import java.security.spec.RSAOtherPrimeInfo;
-import java.text.CollationElementIterator;
 import java.util.*;
-import java.util.stream.Collectors;
-
-import static utils.MathUtil.cosineSimilarity;
-import static utils.MathUtil.sum;
 
 public class SchemaExtraction {
 
@@ -183,11 +173,11 @@ public class SchemaExtraction {
             if (itemContent.equals(entityName))
                 frequency += 1;
         }
-        if (entity.getItemId().equals(item.getItemId())) {
-            System.out.println(entityName + " " + processedSentence.toString());
-            if (frequency == 0)
-                System.out.println("Exception occur");
-        }
+//        if (entity.getItemId().equals(item.getItemId())) {
+//            System.out.println(entityName + " " + processedSentence.toString());
+//            if (frequency == 0)
+//                System.out.println("Exception occur");
+//        }
         double tf = frequency / processedSentence.size();
         double inv_frequency = 0.0;
         for (List<String> doc : docs) {
@@ -331,8 +321,46 @@ public class SchemaExtraction {
         return filterItems;
     }
 
+    public List<String> filterTypes(List<Entity> entities){
+        HashSet<String> res = new HashSet<>();
+        for (Entity entity : entities) {
+            if (entity.getTypeId() != null){
+                res.add(entity.getTypeId());
+            }
+        }
+        return new ArrayList<>(res);
+    }
 
-    public void entrance() throws IOException {
+    public double[][] item_type_matrix(List<Entity> entities, List<Item> items, List<String> types){
+        int numType = types.size();
+        int numEntity = entities.size();
+        int numItem = items.size();
+        double[][] res = new double[numItem][numType];
+        for (int i = 0; i < numItem; i++) {
+            for (int j = 0; j < numType; j++) {
+                res[i][j] = computeITValue(items.get(i), types.get(j), entities);
+            }
+        }
+
+        return res;
+    }
+
+    public double computeITValue(Item item, String type, List<Entity> entities){
+        List<String> words = new JiebaSegmenter().sentenceProcess(item.getItemText());
+        double value = 0.0;
+        for (String word: words){
+            for(Entity entity: entities){
+                if (entity.getEntityName().equals(word) && entity.getTypeId().equals(type)){  // 找到了这个实体并且这个实体的类型符合要求
+                    value = 1.0;
+                    break;
+                }
+            }
+        }
+        return value;
+    }
+
+
+    public void entranceWithTopSim() throws IOException {
         Pair<List<KG>, List<Item>> pairs = ConstructGraph.prepareKGs();
         KG mergedKg = new KGsMergeBasedOnContent(pairs.getLeft(), pairs.getRight()).runMerge();
         Map inDegreeMap = SimilarityJoin5.InDegreeMap(mergedKg);
@@ -366,7 +394,6 @@ public class SchemaExtraction {
                 }
             }
 
-//            System.out.println(str.toString());
 
         }
 
@@ -379,12 +406,65 @@ public class SchemaExtraction {
             System.out.println();
         }
     }
-//    public double[][] returnSimMatrixUseSimRank(KG kg){
-//        Map graph = SimilarityJoin.Graph(kg);
-//        double[][] simMatrix = SimilarityJoin.computeSimRank(kg.getNodes().size(), 5, graph, 0.8);
-//        return simMatrix;
-//    }
 
+    public  HashMap<String, Pair<String, List<String>>> entranceWithRomWalk() throws IOException {  //List<Pair<String, String>>
+        Pair<List<KG>, List<Item>> pairs = ConstructGraph.prepareKGs();
+        KG mergedKg = new KGsMergeBasedOnContent(pairs.getLeft(), pairs.getRight()).runMerge();
+        HashMap<String, Set<Entity>> stringSetHashMap = new SchemaExtraction(mergedKg).typeEntityDic();
+        List<Entity> entities = new ArrayList<>();
+        for (String key : stringSetHashMap.keySet()) {
+            Set<Entity> ens = stringSetHashMap.get(key);
+            entities.addAll(ens);
+        }
+        // 制作随机游走需要的数据 分别是 entity_item_tfidf 和 type_item_matrix
+        List<Item> filterItems = filterItem(entities, pairs.getRight());
+        double[][] entity_item_tfidf = entity_item_tfidf(entities, filterItems);
+
+        // 先构造item_type_matrix 再转置成需要的形式
+        // 需要所有的类型, 但是迭代崩了
+//        List<String> types = new ArrayList<>(schema.keySet());
+
+        // 过滤types
+        List<String> filterTypes = filterTypes(entities);
+
+        double[][] item_type_matrix = item_type_matrix(entities, filterItems, filterTypes); // 这个矩阵需要转成paddingTi需要的样子
+        double[][] needed_item_type_matrix = Matrix.constructWithCopy(item_type_matrix).transpose().getArray();
+        HeRWR heRWR = new HeRWR(0.8, entity_item_tfidf, needed_item_type_matrix, 10);
+        List<Matrix> res = heRWR.entrance();  // 保存每一步的迭代结果
+        // 获取又上角 entity-type matrix
+        double[][] lastStepEntityTypeMatrix = res.get(res.size() - 1 ).getMatrix(0,entities.size()-1, entities.size() + filterItems.size(), entities.size() + filterItems.size() + filterTypes.size() - 1).getArray();
+        // 获取每一行相关度最的值的type Top-1
+//        List<Pair<String, String>> entity_type_pairs = new ArrayList<>();
+//        for (int i = 0; i < entities.size(); i++) {
+//            double maxRelativeScore = 0.0;
+//            int maxIndex = 0;
+//            for (int j = 0; j < filterTypes.size(); j++) {
+//                if (lastStepEntityTypeMatrix[i][j] > maxRelativeScore){
+//                    maxRelativeScore = lastStepEntityTypeMatrix[i][j];
+//                    maxIndex = j;
+//                }
+//            }
+//            entity_type_pairs.add(Pair.of(entities.get(i).getEntityName(), schema.get(entities.get(i).getTypeId()) + "__" +schema.get(filterTypes.get(maxIndex))));
+//        }
+//
+//        MatrixUtil.printMatrix(lastStepEntityTypeMatrix);
+
+        // 返回Top-K个最相关结果
+        HashMap<String, Pair<String, List<String>>> top_k = new HashMap<>();  // 实体名称，真实类型，候选top-k
+        for (int i = 0; i < lastStepEntityTypeMatrix.length; i++) {
+            List<Integer> maxIndexes = Top_K.sortAndOriginalIndex(lastStepEntityTypeMatrix[i], 3, true);
+            String entityName = entities.get(i).getEntityName();
+            String entityType = schema.get(entities.get(i).getTypeId());
+            List<String> top_k_types = new ArrayList<>();
+            for (Integer maxIndex : maxIndexes) {
+                top_k_types.add(schema.get(filterTypes.get(maxIndex)));
+            }
+            top_k.put(entityName, Pair.of(entityType, top_k_types));
+        }
+
+        return top_k;
+//        return entity_type_pairs;
+    }
 
     public Entity copyFromNode(Node node) {
         String nodeId = node.getNodeId();
@@ -417,6 +497,7 @@ public class SchemaExtraction {
     public HashMap<String, String> getSchema() {
         return schema;
     }
+
 
     public static void main(String[] args) throws IOException {
         Pair<List<KG>, List<Item>> pairs = ConstructGraph.prepareKGs();
